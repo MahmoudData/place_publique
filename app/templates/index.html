@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}Place Publique{% endblock %}
+
+{% block content %}
+
+<!-- Liste des webcams -->
+<div class="mb-4">
+  <h1 class="h4 mb-3"><i class="bi bi-camera-video-fill me-2 text-primary"></i>Webcams</h1>
+
+  {% if webcams %}
+  <div class="d-flex flex-wrap gap-2" id="webcam-list">
+    {% for w in webcams %}
+    <button class="btn btn-outline-primary webcam-btn"
+            data-id="{{ w.id }}"
+            data-name="{{ w.name }}"
+            data-location="{{ w.location or '' }}">
+      <i class="bi bi-camera-video me-1"></i>{{ w.name }}
+    </button>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="alert alert-warning">
+    <i class="bi bi-exclamation-triangle me-2"></i>
+    Aucune webcam configurée. Démarrez le service d'inférence.
+  </div>
+  {% endif %}
+</div>
+
+<!-- Dashboard (caché jusqu'à sélection) -->
+<div id="dashboard" class="d-none">
+
+  <!-- En-tête webcam sélectionnée -->
+  <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <div>
+      <span class="h5 mb-0" id="dash-name"></span>
+      <span class="text-secondary ms-2 small" id="dash-location"></span>
+    </div>
+    <div class="btn-group" role="group" id="period-selector">
+      <button type="button" class="btn btn-sm btn-outline-primary active" data-hours="24">24h</button>
+      <button type="button" class="btn btn-sm btn-outline-primary" data-hours="168">7j</button>
+      <button type="button" class="btn btn-sm btn-outline-primary" data-hours="720">30j</button>
+    </div>
+  </div>
+
+  <div class="row g-4">
+
+    <!-- Graphique -->
+    <div class="col-12 col-lg-8">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-graph-up me-2"></i>Détections dans le temps</span>
+          <span class="badge bg-secondary" id="last-update">--</span>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="detectionChart"></canvas>
+          </div>
+          <div id="no-data" class="text-center text-secondary py-5 d-none">
+            <i class="bi bi-inbox fs-1"></i>
+            <p class="mt-2">Aucune donnée pour cette période.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Colonne droite -->
+    <div class="col-12 col-lg-4 d-flex flex-column gap-4">
+
+      <!-- Dernière image annotée -->
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-image me-2"></i>Dernière image analysée
+        </div>
+        <div class="card-body p-0" id="last-image-container">
+          <div class="text-center text-secondary py-4">
+            <i class="bi bi-image fs-2"></i>
+            <p class="mt-2 small">Image non disponible</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tableau récapitulatif -->
+      <div class="card">
+        <div class="card-header">
+          <i class="bi bi-table me-2"></i>Résumé
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-sm table-striped mb-0">
+            <thead>
+              <tr>
+                <th>Classe</th>
+                <th class="text-end">Max</th>
+                <th class="text-end">Moy.</th>
+              </tr>
+            </thead>
+            <tbody id="summary-body">
+              <tr><td colspan="3" class="text-center text-secondary py-3">Chargement…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+{% endblock %}

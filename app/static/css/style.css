@@ -1,0 +1,46 @@
+/* Place Publique — styles */
+
+body {
+  background-color: #f8f9fa;
+}
+
+/* Navbar */
+.navbar-brand {
+  font-size: 1.1rem;
+  letter-spacing: .02em;
+}
+
+/* Cards webcam sur l'index */
+.webcam-card {
+  border: 1px solid #dee2e6;
+  transition: box-shadow .2s, transform .15s;
+  color: #212529;
+}
+.webcam-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  transform: translateY(-2px);
+}
+
+/* Graphique */
+.chart-container {
+  position: relative;
+  height: 340px;
+}
+
+/* Image annotée */
+#last-image {
+  max-height: 280px;
+  object-fit: cover;
+}
+
+/* Tableau */
+#summary-table th {
+  font-weight: 600;
+  background-color: #f1f3f5;
+}
+
+/* Badge mise à jour */
+#last-update {
+  font-size: .7rem;
+  font-weight: 400;
+}
