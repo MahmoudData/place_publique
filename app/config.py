@@ -15,7 +15,7 @@ LAST_IMAGE_PATH = os.path.join(BASE_DIR, 'static', 'images', 'last_detection.jpg
 DATABASE_PATH = os.path.join(DATA_DIR, 'place_publique.db')
 
 # Modèle YOLO
-YOLO_MODEL = 'yolov8x.pt'  # XLarge pour meilleure précision
+YOLO_MODEL = 'yolo11x.pt'  # XLarge pour meilleure précision
 YOLO_CONFIDENCE = 0.25     # Seuil de confiance minimum
 
 # Webcam Place de la Comédie (hard-codée pour MVP)
@@ -28,8 +28,11 @@ WEBCAM_CONFIG = {
 
 # Classes à détecter (COCO dataset)
 CLASSES_TO_DETECT = [
-    'person',  # 0
-    'car',     # 2
+    'person',      # 0
+    'bicycle',     # 1
+    'car',         # 2
+    'motorcycle',  # 3
+    'truck',       # 7
 ]
 
 # Service d'inférence

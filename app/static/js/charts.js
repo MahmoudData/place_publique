@@ -4,9 +4,30 @@
  */
 
 let chart        = null;
+let statsChart   = null;
 let currentHours = 24;
 let currentId    = null;
 let refreshTimer = null;
+let currentStatsPeriod = 'hourly';
+let currentStatsClass  = 'person';
+
+// Libellés français pour le titre du graphique
+const CLASS_LABELS = {
+  person:     'personnes',
+  bicycle:    'vélos',
+  car:        'voitures',
+  motorcycle: 'motos',
+  truck:      'camions',
+};
+
+// Couleurs cohérentes avec app.py
+const CLASS_COLORS = {
+  person:     { bg: 'rgba(54,  162, 235, 0.6)', border: 'rgba(54,  162, 235, 0.9)' },
+  bicycle:    { bg: 'rgba(75,  192, 192, 0.6)', border: 'rgba(75,  192, 192, 0.9)' },
+  car:        { bg: 'rgba(255,  99, 132, 0.6)', border: 'rgba(255,  99, 132, 0.9)' },
+  motorcycle: { bg: 'rgba(255, 159,  64, 0.6)', border: 'rgba(255, 159,  64, 0.9)' },
+  truck:      { bg: 'rgba(153, 102, 255, 0.6)', border: 'rgba(153, 102, 255, 0.9)' },
+};
 
 // ---------------------------------------------------------------------------
 // Sélection webcam
@@ -31,10 +52,22 @@ document.querySelectorAll('.webcam-btn').forEach(btn => {
     document.querySelector('#period-selector button[data-hours="24"]').classList.add('active');
     currentHours = 24;
 
-    // Détruire le chart précédent si besoin
+    // Détruire les charts précédents si besoin
     if (chart) { chart.destroy(); chart = null; }
+    if (statsChart) { statsChart.destroy(); statsChart = null; }
+
+    // Réinitialiser période et classe stats
+    document.querySelectorAll('#stats-period-selector button').forEach(b => b.classList.remove('active'));
+    document.querySelector('#stats-period-selector button[data-period="hourly"]').classList.add('active');
+    currentStatsPeriod = 'hourly';
+
+    document.querySelectorAll('#stats-class-selector button').forEach(b => b.classList.remove('active'));
+    document.querySelector('#stats-class-selector button[data-class="person"]').classList.add('active');
+    currentStatsClass = 'person';
+    document.getElementById('stats-class-label').textContent = CLASS_LABELS['person'];
 
     refresh();
+    refreshStats();
     startAutoRefresh();
   });
 });
@@ -135,9 +168,16 @@ function updateSummary(datasets) {
   }).join('');
 }
 
-function refreshImage() {
+function refreshImage(imageUrl) {
   const container = document.getElementById('last-image-container');
-  const url = `/static/images/last_detection.jpg?ts=${Date.now()}`;
+
+  if (!imageUrl) {
+    container.innerHTML = `<div class="text-center text-secondary py-4"><i class="bi bi-image fs-2"></i><p class="mt-2 small">Image non disponible</p></div>`;
+    return;
+  }
+
+  // Cache-buster pour forcer le rechargement à chaque refresh
+  const url = `${imageUrl}?ts=${Date.now()}`;
   const img = new Image();
   img.onload = () => {
     container.innerHTML = `<img src="${url}" class="img-fluid w-100 rounded-bottom" alt="Dernière détection" id="last-image">`;
@@ -163,7 +203,7 @@ async function refresh() {
     const data = await loadData(currentId, currentHours);
     buildChart(data);
     updateLastUpdate();
-    refreshImage();
+    refreshImage(data.last_image_url || null);
   } catch (err) {
     console.error('Erreur chargement données :', err);
   }
@@ -171,5 +211,113 @@ async function refresh() {
 
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(refresh, 5 * 60 * 1000);
+  refreshTimer = setInterval(() => { refresh(); refreshStats(); }, 5 * 60 * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Sélecteurs stats (période + classe)
+// ---------------------------------------------------------------------------
+
+document.querySelectorAll('#stats-period-selector button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#stats-period-selector button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentStatsPeriod = btn.dataset.period;
+    refreshStats();
+  });
+});
+
+document.querySelectorAll('#stats-class-selector button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#stats-class-selector button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentStatsClass = btn.dataset.class;
+    document.getElementById('stats-class-label').textContent = CLASS_LABELS[currentStatsClass] || currentStatsClass;
+    // Détruire le chart pour forcer une recréation avec la nouvelle couleur
+    if (statsChart) { statsChart.destroy(); statsChart = null; }
+    refreshStats();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stats fetch + rendu (bar chart)
+// ---------------------------------------------------------------------------
+
+async function loadStats(webcamId, period, className) {
+  const resp = await fetch(`/api/stats/${webcamId}?period=${period}&class=${className}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp.json();
+}
+
+function buildStatsChart(data) {
+  const ctx    = document.getElementById('statsChart');
+  const noData = document.getElementById('stats-no-data');
+
+  if (!data.labels || data.labels.length === 0) {
+    ctx.classList.add('d-none');
+    noData.classList.remove('d-none');
+    return;
+  }
+
+  ctx.classList.remove('d-none');
+  noData.classList.add('d-none');
+
+  const cls    = data.class_name || 'person';
+  const colors = CLASS_COLORS[cls] || { bg: 'rgba(100,100,100,0.6)', border: 'rgba(100,100,100,0.9)' };
+  const label  = CLASS_LABELS[cls] || cls;
+  const yLabel = data.period === 'hourly' ? `Moy. ${label}` : `Total ${label}`;
+
+  if (statsChart) {
+    statsChart.data.labels                         = data.labels;
+    statsChart.data.datasets[0].data               = data.data;
+    statsChart.data.datasets[0].label              = label;
+    statsChart.data.datasets[0].backgroundColor    = colors.bg;
+    statsChart.data.datasets[0].borderColor        = colors.border;
+    statsChart.options.scales.y.title.text         = yLabel;
+    statsChart.update();
+  } else {
+    statsChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: data.labels,
+        datasets: [{
+          label:           label,
+          data:            data.data,
+          backgroundColor: colors.bg,
+          borderColor:     colors.border,
+          borderWidth: 1,
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+        },
+        scales: {
+          x: {
+            ticks: { color: '#6c757d', maxRotation: 45 },
+            grid:  { color: 'rgba(0,0,0,.05)' },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { precision: 0, color: '#6c757d' },
+            grid:  { color: 'rgba(0,0,0,.05)' },
+            title: { display: true, text: yLabel, color: '#6c757d' },
+          },
+        },
+      },
+    });
+  }
+}
+
+async function refreshStats() {
+  if (currentId === null) return;
+  try {
+    const data = await loadStats(currentId, currentStatsPeriod, currentStatsClass);
+    buildStatsChart(data);
+  } catch (err) {
+    console.error('Erreur chargement stats :', err);
+  }
 }

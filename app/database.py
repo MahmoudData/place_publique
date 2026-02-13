@@ -43,6 +43,8 @@ class Webcam(Base):
     name        = Column(String, nullable=False)
     location    = Column(String)
     url_pattern = Column(String, nullable=False)   # URL de base (sans timestamp)
+    type        = Column(String, default='viewsurf')  # 'viewsurf' ou 'twitch'
+    channel     = Column(String)                   # Channel Twitch (si type='twitch')
     is_active   = Column(Boolean, default=True)
     created_at  = Column(DateTime(timezone=True), default=utcnow)
 
@@ -50,7 +52,7 @@ class Webcam(Base):
                                cascade='all, delete-orphan')
 
     def __repr__(self) -> str:
-        return f"<Webcam id={self.id} name={self.name!r}>"
+        return f"<Webcam id={self.id} name={self.name!r} type={self.type!r}>"
 
 
 class Detection(Base):
@@ -91,9 +93,31 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 # ---------------------------------------------------------------------------
 
 def init_db() -> None:
-    """Créer toutes les tables (idempotent)."""
+    """Créer toutes les tables (idempotent) et migrer les colonnes manquantes."""
     Base.metadata.create_all(engine)
+    _migrate_webcam_columns()
     logger.info("Base de données initialisée : %s", config.DATABASE_PATH)
+
+
+def _migrate_webcam_columns() -> None:
+    """
+    Ajoute les colonnes 'type' et 'channel' à la table webcams si elles
+    n'existent pas encore (migration légère pour BDD existante).
+    """
+    with engine.connect() as conn:
+        from sqlalchemy import text, inspect as sa_inspect
+        inspector = sa_inspect(engine)
+        existing_cols = {c['name'] for c in inspector.get_columns('webcams')}
+
+        if 'type' not in existing_cols:
+            conn.execute(text("ALTER TABLE webcams ADD COLUMN type VARCHAR DEFAULT 'viewsurf'"))
+            conn.commit()
+            logger.info("Colonne 'type' ajoutée à la table webcams.")
+
+        if 'channel' not in existing_cols:
+            conn.execute(text("ALTER TABLE webcams ADD COLUMN channel VARCHAR"))
+            conn.commit()
+            logger.info("Colonne 'channel' ajoutée à la table webcams.")
 
 
 @contextmanager
@@ -126,6 +150,8 @@ def _webcam_to_dict(webcam: Webcam) -> dict:
         'name':        webcam.name,
         'location':    webcam.location,
         'url_pattern': webcam.url_pattern,
+        'type':        webcam.type or 'viewsurf',
+        'channel':     webcam.channel,
         'is_active':   webcam.is_active,
         'created_at':  webcam.created_at,
     }
@@ -135,24 +161,45 @@ def _webcam_to_dict(webcam: Webcam) -> dict:
 # API publique
 # ---------------------------------------------------------------------------
 
-def add_webcam(name: str, location: str, url_pattern: str) -> dict:
+def add_webcam(name: str, location: str, url_pattern: str,
+               type: str = 'viewsurf', channel: str | None = None) -> dict:
     """
     Ajoute une webcam si elle n'existe pas déjà (basé sur le nom).
 
+    Args:
+        name:        Nom affiché
+        location:    Localisation géographique
+        url_pattern: URL de base (viewsurf) ou chaîne Twitch (twitch)
+        type:        'viewsurf' ou 'twitch'
+        channel:     Nom de la chaîne Twitch (si type='twitch')
+
     Returns:
-        Dict {'id', 'name', 'location', 'url_pattern', 'is_active', 'created_at'}
+        Dict {'id', 'name', 'location', 'url_pattern', 'type', 'channel',
+              'is_active', 'created_at'}
     """
     with get_db_session() as session:
         existing = session.query(Webcam).filter_by(name=name).first()
         if existing:
-            logger.info("Webcam déjà présente : %s (id=%d)", name, existing.id)
+            # Mettre à jour les champs si ils ont changé
+            changed = False
+            for attr, val in [('location', location), ('url_pattern', url_pattern),
+                              ('type', type), ('channel', channel)]:
+                if getattr(existing, attr) != val:
+                    setattr(existing, attr, val)
+                    changed = True
+            if changed:
+                session.flush()
+                logger.info("Webcam mise à jour : %s (id=%d)", name, existing.id)
+            else:
+                logger.info("Webcam déjà présente : %s (id=%d)", name, existing.id)
             return _webcam_to_dict(existing)
 
-        webcam = Webcam(name=name, location=location, url_pattern=url_pattern)
+        webcam = Webcam(name=name, location=location, url_pattern=url_pattern,
+                        type=type, channel=channel)
         session.add(webcam)
         session.flush()   # obtenir l'id avant commit
         result = _webcam_to_dict(webcam)
-        logger.info("Webcam ajoutée : %s (id=%d)", name, webcam.id)
+        logger.info("Webcam ajoutée : %s (id=%d, type=%s)", name, webcam.id, type)
         return result
 
 

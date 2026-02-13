@@ -2,8 +2,11 @@
 
 # Deep Learning & Vision
 ultralytics>=8.0.0          # YOLOv8
-opencv-python-headless>=4.8.0
+opencv-python>=4.8.0        # OpenCV avec GUI (nécessaire pour VideoCapture Twitch)
 Pillow>=10.0.0
+
+# Streaming
+streamlink>=6.0.0           # Récupération URL HLS depuis Twitch
 
 # Web Framework
 Flask>=3.0.0

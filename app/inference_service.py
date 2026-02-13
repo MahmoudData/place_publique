@@ -1,15 +1,19 @@
 """
 Service d'inférence Place Publique
-- Scrape la webcam toutes les 5 minutes
+- Scrape les webcams toutes les 5 minutes
 - Détecte les objets avec YOLOv8
 - Sauvegarde les résultats en BDD
-- Conserve la dernière image annotée
+- Conserve la dernière image annotée par webcam
+
+Scrapers disponibles :
+  - ViewsurfScraper : webcam Viewsurf (URL horodatée)
+  - TwitchScraper   : stream Twitch live via Streamlink + OpenCV
 """
 
 import logging
 import os
-import shutil
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,20 +35,39 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# WebcamScraper
+# Utilitaires
 # ---------------------------------------------------------------------------
 
-class WebcamScraper:
-    """Télécharge les images de la webcam viewsurf."""
+def _safe_name(name: str) -> str:
+    """
+    Transforme un nom de webcam en identifiant sûr pour un nom de fichier :
+    - Supprime les accents (é→e, è→e, â→a, etc.)
+    - Remplace espaces et apostrophes par des underscores
+    - Ne conserve que les caractères alphanumériques et _
+    """
+    # Normalisation Unicode NFD : décompose les lettres accentuées
+    normalized = unicodedata.normalize('NFD', name)
+    # Supprimer les caractères de combinaison (accents)
+    ascii_name = ''.join(c for c in normalized if unicodedata.category(c) != 'Mn')
+    # Remplacer espaces et apostrophes par _
+    ascii_name = ascii_name.replace(' ', '_').replace("'", '_')
+    # Garder seulement alphanum + _
+    ascii_name = ''.join(c for c in ascii_name if c.isalnum() or c == '_')
+    return ascii_name
 
-    BASE_URL = config.WEBCAM_CONFIG['url_base']   # e.g. https://filmspv.viewsurf.com/…/media_
-    SUFFIX   = config.WEBCAM_CONFIG['url_suffix']  # .jpg
 
-    # Dossier temporaire pour les images brutes
-    TMP_DIR = Path(config.IMAGES_DIR)
+# ---------------------------------------------------------------------------
+# ViewsurfScraper (anciennement WebcamScraper)
+# ---------------------------------------------------------------------------
 
-    def __init__(self):
-        self.TMP_DIR.mkdir(parents=True, exist_ok=True)
+class ViewsurfScraper:
+    """Télécharge les images de la webcam Viewsurf (URL horodatée)."""
+
+    def __init__(self, url_base: str, url_suffix: str, tmp_dir: Path):
+        self.url_base  = url_base
+        self.url_suffix = url_suffix
+        self.tmp_dir   = tmp_dir
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
     # Helpers timestamp
@@ -82,15 +105,15 @@ class WebcamScraper:
         """
         for offset in [0, -5, -10]:
             ts = self.get_rounded_timestamp(offset)
-            dest = self.TMP_DIR / f"tmp_{ts}.jpg"
+            dest = self.tmp_dir / f"tmp_{ts}.jpg"
 
             # Haute qualité d'abord, puis miniature
-            for url in [f"{self.BASE_URL}{ts}{self.SUFFIX}",
-                        f"{self.BASE_URL}{ts}_tn{self.SUFFIX}"]:
+            for url in [f"{self.url_base}{ts}{self.url_suffix}",
+                        f"{self.url_base}{ts}_tn{self.url_suffix}"]:
                 if self._fetch(url, dest):
                     return dest
 
-        logger.warning("Aucune image disponible après 3 tentatives.")
+        logger.warning("Viewsurf : aucune image disponible après 3 tentatives.")
         return None
 
     def cleanup(self, path: Path) -> None:
@@ -99,6 +122,146 @@ class WebcamScraper:
             path.unlink(missing_ok=True)
         except OSError as exc:
             logger.debug("Cleanup impossible : %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# TwitchScraper
+# ---------------------------------------------------------------------------
+
+class TwitchScraper:
+    """
+    Capture une frame depuis un stream Twitch live.
+
+    Utilise l'API Python Streamlink pour récupérer l'URL HLS, puis
+    OpenCV pour lire la vidéo et extraire une image.
+    """
+
+    def __init__(self, channel: str, tmp_dir: Path):
+        """
+        Args:
+            channel: Nom de la chaîne Twitch (ex. 'villebethunegplace')
+            tmp_dir: Dossier temporaire où stocker la frame
+        """
+        self.channel = channel
+        self.tmp_dir = tmp_dir
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+
+    def _get_stream_url(self) -> str | None:
+        """
+        Récupère l'URL HLS du stream via l'API Python de Streamlink.
+
+        Returns:
+            URL HLS (str) ou None si le stream est hors ligne / erreur.
+        """
+        try:
+            from streamlink import Streamlink
+
+            session = Streamlink()
+            streams = session.streams(f"https://www.twitch.tv/{self.channel}")
+
+            if not streams:
+                logger.warning("Twitch %s : aucun stream disponible.", self.channel)
+                return None
+
+            url = streams["best"].url
+            logger.debug("Twitch %s : stream trouvé (%s).",
+                         self.channel, list(streams.keys()))
+            return url
+
+        except Exception as exc:
+            logger.error("Twitch %s : erreur Streamlink : %s", self.channel, exc)
+            return None
+
+    # ------------------------------------------------------------------
+
+    def download_latest(self) -> Path | None:
+        """
+        Capture une frame depuis le stream Twitch.
+
+        Returns:
+            Path vers l'image capturée, ou None en cas d'échec.
+        """
+        import cv2
+
+        stream_url = self._get_stream_url()
+        if not stream_url:
+            return None
+
+        dest = self.tmp_dir / f"tmp_twitch_{self.channel}_{int(time.time())}.jpg"
+
+        try:
+            logger.debug("Twitch %s : connexion au stream OpenCV…", self.channel)
+            cap = cv2.VideoCapture(stream_url)
+
+            if not cap.isOpened():
+                logger.error("Twitch %s : OpenCV ne peut pas ouvrir le stream.", self.channel)
+                return None
+
+            # Lire quelques frames pour stabiliser le buffer HLS
+            for _ in range(3):
+                cap.read()
+
+            # Frame finale
+            ret, frame = cap.read()
+            cap.release()
+
+            if not ret or frame is None:
+                logger.error("Twitch %s : frame non récupérée.", self.channel)
+                return None
+
+            cv2.imwrite(str(dest), frame)
+            size_kb = dest.stat().st_size / 1024
+            logger.debug("Twitch %s : frame sauvegardée (%.1f KB).", self.channel, size_kb)
+            return dest
+
+        except Exception as exc:
+            logger.error("Twitch %s : erreur OpenCV : %s", self.channel, exc)
+            # Nettoyage partiel
+            if dest.exists():
+                dest.unlink(missing_ok=True)
+            return None
+
+    def cleanup(self, path: Path) -> None:
+        """Supprime le fichier temporaire."""
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("Cleanup impossible : %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Factory : choisit le bon scraper selon webcam.type
+# ---------------------------------------------------------------------------
+
+def make_scraper(webcam: dict, tmp_dir: Path):
+    """
+    Retourne l'instance de scraper appropriée selon webcam['type'].
+
+    Args:
+        webcam:  Dict retourné par add_webcam / get_webcam
+        tmp_dir: Dossier pour les images temporaires
+
+    Returns:
+        ViewsurfScraper | TwitchScraper
+    """
+    webcam_type = webcam.get('type', 'viewsurf')
+
+    if webcam_type == 'twitch':
+        channel = webcam.get('channel')
+        if not channel:
+            raise ValueError(
+                f"Webcam '{webcam['name']}' de type 'twitch' sans champ 'channel'."
+            )
+        return TwitchScraper(channel=channel, tmp_dir=tmp_dir)
+
+    # Défaut : viewsurf
+    return ViewsurfScraper(
+        url_base=webcam['url_pattern'],
+        url_suffix=config.WEBCAM_CONFIG.get('url_suffix', '.jpg'),
+        tmp_dir=tmp_dir,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -121,18 +284,24 @@ class YOLODetector:
         self.model = YOLO(str(model_path))
         logger.info("Modèle YOLO chargé : %s", model_path)
 
-    def detect(self, image_path: Path) -> tuple[dict[str, int], dict[str, float], Path | None]:
+    def detect(self, image_path: Path,
+               annotated_dest: Path | None = None
+               ) -> tuple[dict[str, int], dict[str, float], Path | None]:
         """
         Applique YOLO sur une image.
+
+        Args:
+            image_path:     Image source
+            annotated_dest: Où sauvegarder l'image annotée (None = config par défaut)
 
         Returns:
             counts       : {class_name: count}
             confidences  : {class_name: avg_confidence}
-            annotated    : Path vers l'image annotée (dans static/images/), ou None
+            annotated    : Path vers l'image annotée, ou None
         """
         results = self.model(str(image_path), conf=self.CONF, verbose=False)
 
-        counts: dict[str, int]   = {}
+        counts: dict[str, int]      = {}
         conf_sums: dict[str, float] = {}
 
         for result in results:
@@ -146,16 +315,18 @@ class YOLODetector:
         confidences = {k: conf_sums[k] / counts[k] for k in counts}
 
         # Sauvegarder l'image annotée
+        if annotated_dest is None:
+            annotated_dest = Path(config.LAST_IMAGE_PATH)
+
         annotated_path: Path | None = None
         try:
-            dest = Path(config.LAST_IMAGE_PATH)
-            dest.parent.mkdir(parents=True, exist_ok=True)
+            annotated_dest.parent.mkdir(parents=True, exist_ok=True)
             annotated_img = results[0].plot()   # numpy array BGR
 
             import cv2
-            cv2.imwrite(str(dest), annotated_img)
-            annotated_path = dest
-            logger.debug("Image annotée sauvegardée : %s", dest)
+            cv2.imwrite(str(annotated_dest), annotated_img)
+            annotated_path = annotated_dest
+            logger.debug("Image annotée sauvegardée : %s", annotated_dest)
         except Exception as exc:
             logger.warning("Impossible de sauvegarder l'image annotée : %s", exc)
 
@@ -163,25 +334,22 @@ class YOLODetector:
 
 
 # ---------------------------------------------------------------------------
-# InferenceService
+# WebcamJob : un cycle complet pour UNE webcam
 # ---------------------------------------------------------------------------
 
-class InferenceService:
-    """Orchestre scraping + détection + persistance."""
+class WebcamJob:
+    """
+    Exécute le cycle scrape → détecte → sauvegarde pour une webcam donnée.
+    """
 
-    def __init__(self):
-        init_db()
+    def __init__(self, webcam: dict, detector: YOLODetector):
+        self.webcam   = webcam
+        self.detector = detector
+        self.scraper  = make_scraper(webcam, Path(config.IMAGES_DIR))
 
-        # S'assurer que la webcam existe en BDD
-        self.webcam = add_webcam(
-            name=config.WEBCAM_CONFIG['name'],
-            location=config.WEBCAM_CONFIG['location'],
-            url_pattern=config.WEBCAM_CONFIG['url_base'],
-        )
-        logger.info("Webcam : %s (id=%d)", self.webcam['name'], self.webcam['id'])
-
-        self.scraper  = WebcamScraper()
-        self.detector = YOLODetector()
+        # Image annotée spécifique à cette webcam
+        static_images = Path(config.LAST_IMAGE_PATH).parent
+        self.annotated_dest = static_images / f"last_detection_{webcam['id']}_{_safe_name(webcam['name'])}.jpg"
 
     # ------------------------------------------------------------------
 
@@ -192,23 +360,26 @@ class InferenceService:
         Returns:
             True si tout s'est bien passé.
         """
-        logger.info("--- Début du cycle d'inférence ---")
+        name = self.webcam['name']
+        logger.info("--- Début du cycle : %s ---", name)
         image_path = None
 
         try:
             # 1. Télécharger l'image
             image_path = self.scraper.download_latest()
             if image_path is None:
-                logger.error("Cycle ignoré : image non disponible.")
+                logger.error("[%s] Cycle ignoré : image non disponible.", name)
                 return False
 
             # 2. Détecter
-            counts, confidences, _ = self.detector.detect(image_path)
+            counts, confidences, _ = self.detector.detect(
+                image_path, annotated_dest=self.annotated_dest
+            )
 
             if not counts:
-                logger.info("Aucun objet détecté (classes cibles).")
+                logger.info("[%s] Aucun objet détecté (classes cibles).", name)
             else:
-                logger.info("Détections : %s", counts)
+                logger.info("[%s] Détections : %s", name, counts)
 
             # 3. Persister
             ts = datetime.now(timezone.utc)
@@ -221,35 +392,80 @@ class InferenceService:
                     confidence=confidences.get(class_name),
                 )
 
-            logger.info("Cycle terminé. %d classe(s) sauvegardée(s).", len(counts))
+            logger.info("[%s] Cycle terminé. %d classe(s) sauvegardée(s).",
+                        name, len(counts))
             return True
 
         except Exception as exc:
-            logger.exception("Erreur inattendue pendant le cycle : %s", exc)
+            logger.exception("[%s] Erreur inattendue pendant le cycle : %s", name, exc)
             return False
 
         finally:
-            # Nettoyage image temporaire
             if image_path is not None:
                 self.scraper.cleanup(image_path)
+
+
+# ---------------------------------------------------------------------------
+# InferenceService
+# ---------------------------------------------------------------------------
+
+class InferenceService:
+    """Orchestre scraping + détection + persistance pour toutes les webcams."""
+
+    def __init__(self):
+        init_db()
+
+        self.detector = YOLODetector()
+
+        # --- Webcam 1 : Place de la Comédie (Viewsurf) ---
+        comedie = add_webcam(
+            name=config.WEBCAM_CONFIG['name'],
+            location=config.WEBCAM_CONFIG['location'],
+            url_pattern=config.WEBCAM_CONFIG['url_base'],
+            type='viewsurf',
+        )
+        logger.info("Webcam : %s (id=%d, type=viewsurf)", comedie['name'], comedie['id'])
+
+        # --- Webcam 2 : Grand'Place Béthune (Twitch) ---
+        bethune = add_webcam(
+            name="Grand'Place Béthune",
+            location="Béthune, France",
+            url_pattern="https://www.twitch.tv/villebethunegplace",
+            type='twitch',
+            channel='villebethunegplace',
+        )
+        logger.info("Webcam : %s (id=%d, type=twitch)", bethune['name'], bethune['id'])
+
+        # Créer un job par webcam
+        self.jobs = [
+            WebcamJob(webcam=comedie,  detector=self.detector),
+            WebcamJob(webcam=bethune,  detector=self.detector),
+        ]
+
+    # ------------------------------------------------------------------
+
+    def run_all_once(self) -> None:
+        """Exécute un cycle pour chaque webcam enregistrée."""
+        for job in self.jobs:
+            job.run_once()
 
     # ------------------------------------------------------------------
 
     def start_scheduler(self) -> None:
-        """Lance APScheduler (bloquant) : exécute run_once toutes les 5 min."""
+        """Lance APScheduler (bloquant) : exécute run_all_once toutes les 5 min."""
         interval = config.DETECTION_INTERVAL_MINUTES
 
         # Premier cycle immédiat
         logger.info("Premier cycle immédiat avant démarrage du scheduler…")
-        self.run_once()
+        self.run_all_once()
 
         scheduler = BlockingScheduler(timezone='UTC')
         scheduler.add_job(
-            self.run_once,
+            self.run_all_once,
             trigger='interval',
             minutes=interval,
-            id='inference',
-            name='Inference cycle',
+            id='inference_all',
+            name='Inference cycle (all webcams)',
             misfire_grace_time=60,
         )
 

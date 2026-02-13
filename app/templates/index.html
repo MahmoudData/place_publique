@@ -103,6 +103,42 @@
 
     </div>
   </div>
+
+  <!-- Statistiques de fréquentation -->
+  <div class="row g-4 mt-2">
+    <div class="col-12">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <span><i class="bi bi-bar-chart-fill me-2"></i>Fréquentation — <span id="stats-class-label">personnes</span></span>
+          <div class="d-flex flex-wrap gap-2 align-items-center">
+            <div class="btn-group btn-group-sm" role="group" id="stats-class-selector">
+              <button type="button" class="btn btn-outline-primary active"  data-class="person">Personnes</button>
+              <button type="button" class="btn btn-outline-primary" data-class="bicycle">Vélos</button>
+              <button type="button" class="btn btn-outline-primary" data-class="car">Voitures</button>
+              <button type="button" class="btn btn-outline-primary" data-class="motorcycle">Motos</button>
+              <button type="button" class="btn btn-outline-primary" data-class="truck">Camions</button>
+            </div>
+            <div class="btn-group btn-group-sm" role="group" id="stats-period-selector">
+              <button type="button" class="btn btn-outline-secondary active" data-period="hourly">Par heure</button>
+              <button type="button" class="btn btn-outline-secondary" data-period="daily">Par jour</button>
+              <button type="button" class="btn btn-outline-secondary" data-period="weekly">Par semaine</button>
+              <button type="button" class="btn btn-outline-secondary" data-period="monthly">Par mois</button>
+            </div>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="statsChart"></canvas>
+          </div>
+          <div id="stats-no-data" class="text-center text-secondary py-5 d-none">
+            <i class="bi bi-inbox fs-1"></i>
+            <p class="mt-2">Aucune donnée pour cette période.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 {% endblock %}
