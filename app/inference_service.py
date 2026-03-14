@@ -314,14 +314,22 @@ class YOLODetector:
 
         confidences = {k: conf_sums[k] / counts[k] for k in counts}
 
-        # Sauvegarder l'image annotée
+        # Sauvegarder l'image annotée (uniquement les classes cibles)
         if annotated_dest is None:
             annotated_dest = Path(config.LAST_IMAGE_PATH)
 
         annotated_path: Path | None = None
         try:
             annotated_dest.parent.mkdir(parents=True, exist_ok=True)
-            annotated_img = results[0].plot()   # numpy array BGR
+
+            # Filtrer les boxes pour ne garder que nos classes
+            result = results[0]
+            keep = [
+                i for i, box in enumerate(result.boxes)
+                if self.model.names[int(box.cls)] in self.CLASSES
+            ]
+            filtered = result[keep] if keep else result[[]]
+            annotated_img = filtered.plot()   # numpy array BGR
 
             import cv2
             cv2.imwrite(str(annotated_dest), annotated_img)
