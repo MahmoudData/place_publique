@@ -49,3 +49,18 @@ FLASK_DEBUG = True  # False en production
 # Stockage images
 KEEP_IMAGES = False  # True = garder toutes les images, False = juste les counts
 KEEP_LAST_IMAGE = True  # Garder dernière image annotée pour preview
+
+# ---------------------------------------------------------------------------
+# MLflow
+# ---------------------------------------------------------------------------
+MLFLOW_ENABLED = True
+MLFLOW_TRACKING_URI = os.environ.get(
+    'MLFLOW_TRACKING_URI',
+    f'sqlite:///{os.path.join(DATA_DIR, "mlflow.db")}'
+)
+MLFLOW_EXPERIMENT_PREFIX = 'place_publique'
+
+# Drift detection
+MLFLOW_DRIFT_WINDOW_SIZE = 50       # Cycles dans la fenetre glissante
+MLFLOW_DRIFT_Z_THRESHOLD = 2.5     # Seuils en ecarts-types
+MLFLOW_ALERT_WEBHOOK = os.environ.get('MLFLOW_ALERT_WEBHOOK', None)

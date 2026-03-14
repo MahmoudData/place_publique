@@ -22,6 +22,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 import config
 from database import add_webcam, init_db, save_detection
+from mlflow_tracking import create_tracker
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -424,6 +425,14 @@ class WebcamJob:
         static_images = Path(config.LAST_IMAGE_PATH).parent
         self.annotated_dest = static_images / f"last_detection_{webcam['id']}_{_safe_name(webcam['name'])}.jpg"
 
+        # MLflow tracking (non bloquant)
+        try:
+            self.tracker, self.drift_detector = create_tracker(webcam)
+        except Exception as exc:
+            logger.warning("MLflow desactive pour %s : %s", webcam['name'], exc)
+            self.tracker = None
+            self.drift_detector = None
+
     # ------------------------------------------------------------------
 
     def run_once(self) -> bool:
@@ -438,21 +447,25 @@ class WebcamJob:
         image_path = None
 
         try:
-            # 1. Télécharger l'image
+            # 1. Telecharger l'image
             image_path = self.scraper.download_latest()
             if image_path is None:
-                logger.error("[%s] Cycle ignoré : image non disponible.", name)
+                logger.error("[%s] Cycle ignore : image non disponible.", name)
+                if self.tracker:
+                    self.tracker.log_failure("image_download_failed")
                 return False
 
-            # 2. Détecter
+            # 2. Detecter (avec timer)
+            t0 = time.time()
             counts, confidences, _ = self.detector.detect(
                 image_path, annotated_dest=self.annotated_dest
             )
+            inference_time = time.time() - t0
 
             if not counts:
-                logger.info("[%s] Aucun objet détecté (classes cibles).", name)
+                logger.info("[%s] Aucun objet detecte (classes cibles).", name)
             else:
-                logger.info("[%s] Détections : %s", name, counts)
+                logger.info("[%s] Detections : %s", name, counts)
 
             # 3. Persister
             ts = datetime.now(timezone.utc)
@@ -465,7 +478,34 @@ class WebcamJob:
                     confidence=confidences.get(class_name),
                 )
 
-            logger.info("[%s] Cycle terminé. %d classe(s) sauvegardée(s).",
+            # 4. MLflow tracking + drift detection
+            if self.tracker:
+                try:
+                    men = counts.get('Man', 0)
+                    women = counts.get('Woman', 0)
+                    unclassified = counts.get('person', 0)
+                    total_persons = men + women + unclassified
+                    gender_rate = (men + women) / total_persons if total_persons > 0 else 0.0
+
+                    self.tracker.log_cycle(
+                        counts=counts,
+                        confidences=confidences,
+                        inference_time_s=inference_time,
+                        image_downloaded=True,
+                        gender_stats={'rate': gender_rate, 'men': men, 'women': women},
+                    )
+
+                    alerts = self.drift_detector.check_cycle(
+                        counts=counts,
+                        confidences=confidences,
+                        gender_rate=gender_rate,
+                    )
+                    for alert in alerts:
+                        logger.warning("[DRIFT] [%s] %s", name, alert)
+                except Exception as exc:
+                    logger.warning("[%s] Erreur MLflow (non bloquante) : %s", name, exc)
+
+            logger.info("[%s] Cycle termine. %d classe(s) sauvegardee(s).",
                         name, len(counts))
             return True
 

@@ -20,5 +20,8 @@ APScheduler>=3.10.0
 requests>=2.31.0
 python-dateutil>=2.8.0
 
+# MLflow (tracking & monitoring)
+mlflow>=2.10.0
+
 # Production (optionnel)
 gunicorn>=21.0.0           # Serveur WSGI pour production
