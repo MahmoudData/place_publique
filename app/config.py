@@ -15,8 +15,9 @@ LAST_IMAGE_PATH = os.path.join(BASE_DIR, 'static', 'images', 'last_detection.jpg
 DATABASE_PATH = os.path.join(DATA_DIR, 'place_publique.db')
 
 # Modèle YOLO
-YOLO_MODEL = 'best.pt'  # XLarge pour meilleure précision 'yolo11x.pt'
-YOLO_CONFIDENCE = 0.25     # Seuil de confiance minimum
+YOLO_MODEL = 'best.pt'           # Détection principale (person, car, bicycle…)
+YOLO_GENDER_MODEL = 'best_genre.pt'  # Classification genre (Man, Woman)
+YOLO_CONFIDENCE = 0.25           # Seuil de confiance minimum
 
 # Webcam Place de la Comédie (hard-codée pour MVP)
 WEBCAM_CONFIG = {

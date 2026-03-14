@@ -269,72 +269,137 @@ def make_scraper(webcam: dict, tmp_dir: Path):
 # ---------------------------------------------------------------------------
 
 class YOLODetector:
-    """Détecte les objets via YOLOv8."""
+    """
+    Pipeline double modèle :
+      1. best.pt   → détecte person, bicycle, car, motorcycle, truck
+      2. best_genre.pt → classifie chaque personne en Man / Woman
+    """
 
     CLASSES = set(config.CLASSES_TO_DETECT)
     CONF    = config.YOLO_CONFIDENCE
 
+    # Couleurs BGR pour l'annotation
+    _COLORS = {
+        'Man':        (255, 150,  50),   # bleu
+        'Woman':      (147,  20, 255),   # rose/violet
+        'person':     (  0, 255,   0),   # vert (fallback si genre échoue)
+        'bicycle':    (  0, 255, 255),   # jaune
+        'car':        (255,   0,   0),   # bleu foncé
+        'motorcycle': (  0, 165, 255),   # orange
+        'truck':      (128, 128, 128),   # gris
+    }
+
     def __init__(self):
         from ultralytics import YOLO
 
-        model_path = Path(config.MODELS_DIR) / config.YOLO_MODEL
-        if not model_path.exists():
-            raise FileNotFoundError(f"Modèle introuvable : {model_path}")
+        # Modèle principal (détection)
+        main_path = Path(config.MODELS_DIR) / config.YOLO_MODEL
+        if not main_path.exists():
+            raise FileNotFoundError(f"Modèle introuvable : {main_path}")
+        self.model = YOLO(str(main_path))
+        logger.info("Modèle détection chargé : %s", main_path)
 
-        self.model = YOLO(str(model_path))
-        logger.info("Modèle YOLO chargé : %s", model_path)
+        # Modèle genre (classification sur crops)
+        gender_path = Path(config.MODELS_DIR) / config.YOLO_GENDER_MODEL
+        if not gender_path.exists():
+            raise FileNotFoundError(f"Modèle genre introuvable : {gender_path}")
+        self.gender_model = YOLO(str(gender_path))
+        logger.info("Modèle genre chargé : %s", gender_path)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _classify_gender(self, img_bgr, x1: int, y1: int, x2: int, y2: int) -> str:
+        """
+        Crop avec padding autour de la personne, puis classification genre.
+        Le padding donne du contexte et agrandi le crop pour best_genre.pt.
+        """
+        try:
+            h_img, w_img = img_bgr.shape[:2]
+            w_box, h_box = x2 - x1, y2 - y1
+            # Padding = 50% de la taille de la box
+            pad_x = int(w_box * 0.5)
+            pad_y = int(h_box * 0.5)
+            cx1 = max(0, x1 - pad_x)
+            cy1 = max(0, y1 - pad_y)
+            cx2 = min(w_img, x2 + pad_x)
+            cy2 = min(h_img, y2 + pad_y)
+            crop = img_bgr[cy1:cy2, cx1:cx2]
+            if crop.size == 0:
+                return 'person'
+            res = self.gender_model(crop, conf=0.15, verbose=False)
+            if res and res[0].boxes and len(res[0].boxes):
+                return self.gender_model.names[int(res[0].boxes[0].cls)]
+            return 'person'
+        except Exception as exc:
+            logger.debug("Genre non déterminé : %s", exc)
+            return 'person'
+
+    # ------------------------------------------------------------------
 
     def detect(self, image_path: Path,
                annotated_dest: Path | None = None
                ) -> tuple[dict[str, int], dict[str, float], Path | None]:
         """
-        Applique YOLO sur une image.
-
-        Args:
-            image_path:     Image source
-            annotated_dest: Où sauvegarder l'image annotée (None = config par défaut)
+        Pipeline : best.pt détecte → pour chaque person, crop+padding → best_genre.pt.
 
         Returns:
-            counts       : {class_name: count}
+            counts       : {class_name: count}  (Man, Woman, car, bicycle…)
             confidences  : {class_name: avg_confidence}
             annotated    : Path vers l'image annotée, ou None
         """
+        import cv2
+
         results = self.model(str(image_path), conf=self.CONF, verbose=False)
+        img_bgr = cv2.imread(str(image_path))
 
         counts: dict[str, int]      = {}
         conf_sums: dict[str, float] = {}
+        draw_boxes: list[tuple] = []
 
         for result in results:
             for box in result.boxes:
                 label = self.model.names[int(box.cls)]
                 if label not in self.CLASSES:
                     continue
-                counts[label]    = counts.get(label, 0) + 1
-                conf_sums[label] = conf_sums.get(label, 0.0) + float(box.conf)
+
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                conf_val = float(box.conf)
+
+                if label == 'person' and img_bgr is not None:
+                    final_label = self._classify_gender(img_bgr, x1, y1, x2, y2)
+                else:
+                    final_label = label
+
+                counts[final_label]    = counts.get(final_label, 0) + 1
+                conf_sums[final_label] = conf_sums.get(final_label, 0.0) + conf_val
+                draw_boxes.append((x1, y1, x2, y2, final_label, conf_val))
 
         confidences = {k: conf_sums[k] / counts[k] for k in counts}
 
-        # Sauvegarder l'image annotée (uniquement les classes cibles)
+        # Sauvegarder l'image annotée
         if annotated_dest is None:
             annotated_dest = Path(config.LAST_IMAGE_PATH)
 
         annotated_path: Path | None = None
         try:
             annotated_dest.parent.mkdir(parents=True, exist_ok=True)
+            annotated_img = img_bgr.copy() if img_bgr is not None else None
 
-            # Filtrer les boxes pour ne garder que nos classes
-            result = results[0]
-            keep = [
-                i for i, box in enumerate(result.boxes)
-                if self.model.names[int(box.cls)] in self.CLASSES
-            ]
-            filtered = result[keep] if keep else result[[]]
-            annotated_img = filtered.plot()   # numpy array BGR
+            if annotated_img is not None:
+                for (x1, y1, x2, y2, lbl, cf) in draw_boxes:
+                    color = self._COLORS.get(lbl, (0, 255, 0))
+                    cv2.rectangle(annotated_img, (x1, y1), (x2, y2), color, 2)
+                    text = f"{lbl} {cf:.0%}"
+                    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    cv2.rectangle(annotated_img, (x1, y1 - th - 6), (x1 + tw, y1), color, -1)
+                    cv2.putText(annotated_img, text, (x1, y1 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
-            import cv2
-            cv2.imwrite(str(annotated_dest), annotated_img)
-            annotated_path = annotated_dest
-            logger.debug("Image annotée sauvegardée : %s", annotated_dest)
+                cv2.imwrite(str(annotated_dest), annotated_img)
+                annotated_path = annotated_dest
+                logger.debug("Image annotée sauvegardée : %s", annotated_dest)
         except Exception as exc:
             logger.warning("Impossible de sauvegarder l'image annotée : %s", exc)
 
