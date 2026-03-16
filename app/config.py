@@ -44,7 +44,7 @@ RETRY_DELAY_SECONDS = 60        # Délai entre tentatives
 # Flask
 FLASK_HOST = '0.0.0.0'
 FLASK_PORT = 5000
-FLASK_DEBUG = True  # False en production
+FLASK_DEBUG = os.environ.get('FLASK_DEBUG', '1') == '1'  # False en production / Docker
 
 # Stockage images
 KEEP_IMAGES = False  # True = garder toutes les images, False = juste les counts

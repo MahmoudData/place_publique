@@ -113,8 +113,10 @@ def api_detections(webcam_id: int):
     # Couleurs par classe (cohérentes avec le CSS)
     COLORS = {
         'person':     'rgba(54,  162, 235, 0.8)',  # bleu
+        'Man':        'rgba(75,  135, 220, 0.8)',  # bleu foncé
+        'Woman':      'rgba(255, 99,  132, 0.8)',  # rose
         'bicycle':    'rgba(75,  192, 192, 0.8)',  # vert-cyan
-        'car':        'rgba(255, 99,  132, 0.8)',  # rouge
+        'car':        'rgba(255, 206,  86, 0.8)',  # jaune
         'motorcycle': 'rgba(255, 159,  64, 0.8)',  # orange
         'truck':      'rgba(153, 102, 255, 0.8)',  # violet
     }
