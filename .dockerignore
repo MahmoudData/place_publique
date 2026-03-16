@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Git
+.git/
+.github/
+
+# IDE
+.vscode/
+*.code-workspace
+
+# Modèles YOLO (montés en volume, pas copiés dans l'image)
+app/models/
+
+# Données locales (recréées par l'app)
+app/data/
+app/images/
+app/static/images/*.jpg
+
+# Divers
+data/
+detection-genre/
+notebooks/
+scripts/
+docs/
+*.md
+!app/requirements.txt
+media_*.jpg

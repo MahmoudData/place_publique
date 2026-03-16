@@ -1,0 +1,25 @@
+# =============================================================================
+# Place Publique - Docker Compose
+# =============================================================================
+
+services:
+  app:
+    build: .
+    container_name: place-publique
+    ports:
+      - "5000:5000"
+    volumes:
+      # Modèles YOLO (montés depuis l'hôte pour ne pas alourdir l'image)
+      - ./app/models:/app/models:ro
+      # Persistance BDD SQLite + MLflow
+      - place-publique-data:/app/data
+      # Images annotées (partagées entre inference et Flask)
+      - place-publique-images:/app/static/images
+    environment:
+      - FLASK_DEBUG=0
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
+volumes:
+  place-publique-data:
+  place-publique-images:
