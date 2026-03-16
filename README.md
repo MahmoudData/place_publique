@@ -1,95 +1,103 @@
-# place_publique
+# Place Publique
 
-Place Publique - FlowView
-Solution d'analyse vidéo intelligente pour le comptage de flux dans les espaces publics.
+Comptage automatique de personnes et vehicules sur des places publiques via webcam, avec detection YOLOv8 et dashboard temps reel.
 
-Contexte du projet
-FlowView est une startup spécialisée dans l'analyse vidéo intelligente. Le projet Place Publique vise à fournir aux acteurs territoriaux (villes, stations de ski, ports, offices de tourisme) un outil performant pour quantifier les flux de visiteurs et de véhicules à partir de caméras déjà installées.
+## Architecture
 
-Ce projet a été réalisé dans le cadre du Master 2 Data/IA (Mise en situation professionnelle).
+```
+Flask (dashboard)  <--  API REST  -->  SQLite
+                                         ^
+                               Inference Service
+                              (APScheduler / 5 min)
+                                    |
+                          YOLOv8 detection + genre
+                                    |
+                              Webcam scraping
+```
 
-Objectifs
-Comptage automatisé : Détection de piétons, véhicules, skieurs ou bateaux selon le contexte client.
+## Stack technique
 
-Respect de la vie privée : Solution Privacy by Design conforme au RGPD (pas de reconnaissance faciale, uniquement du dénombrement).
+- **Detection** : YOLOv8 (detection objets + classification genre)
+- **Backend** : Flask + Gunicorn
+- **Base de donnees** : SQLite + SQLAlchemy
+- **Frontend** : Bootstrap 5 + Chart.js
+- **Scheduling** : APScheduler (cycle toutes les 5 min)
+- **Tracking** : MLflow (metriques + drift detection)
 
-Aide à la décision : Fournir des statistiques pour dimensionner les services publics et gérer les infrastructures.
+## Installation locale
 
-Fonctionnalités
-L'application se décompose en plusieurs modules :
-
-Backend d'Inférence (IA) :
-
-Utilisation de modèles YOLO (You Only Look Once) pour la détection d'objets.
-
-Traitement périodique des flux vidéo ou images statiques.
-
-Stockage des résultats (comptages par classe) en base de données temporelle.
-
-Frontend (Application Web) :
-
-Interface développée avec Flask.
-
-Tableau de bord de visualisation des statistiques (graphiques Chart.js).
-
-Gestion des caméras (ajout/suppression de flux).
-
-Monitoring MLOps :
-
-Suivi des expériences et modèles via MLflow.
-
-Structure du dépôt
-Ce dépôt contient l'ensemble des livrables techniques et documentaires attendus.
-
-place_publique/ ├── app/ # Code source de l'application Flask │ ├── static/ # Fichiers CSS, JS, Images │ ├── templates/ # Templates HTML (Jinja2) │ ├── app.py # Point d'entrée de l'application web │ └── ... ├── data/ # Données (DB SQLite, CSVs exemples) ├── docs/ # Documentation obligatoire │ ├── architecture.md # Architecture technique et production │ ├── veille.md # Rapport de veille technique (SOTA) │ └── conformite.md # Analyse RGPD et AI Act ├── models/ # Partie Data Science & IA │ ├── notebooks/ # Notebooks d'entraînement et d'évaluation │ ├── weights/ # Poids des modèles entraînés (.pt) │ └── inference.py # Script de détection d'objets ├── tests/ # Tests unitaires ├── requirements.txt # Dépendances Python └── README.md # Ce fichier
-
-Installation et Démarrage
-Prérequis
-Python 3.9 ou supérieur
-
-Git
-
-1. Cloner le projet
-git clone https://github.com/MahmoudData/place_publique.git cd place_publique
-
-2. Créer un environnement virtuel
-python -m venv venv
-
-Sur Windows :
-venv\Scripts\activate
-
-Sur Mac/Linux :
-source venv/bin/activate
-
-3. Installer les dépendances
+```bash
+cd app
 pip install -r requirements.txt
+```
 
-4. Lancer l'application Web
-cd app flask run
+Placer les modeles YOLO dans `app/models/` :
+- `best.pt` — detection (person, car, bicycle, motorcycle, truck)
+- `best_genre.pt` — classification genre (Man, Woman)
 
-L'application sera accessible à l'adresse : http://127.0.0.1:5000
+## Lancement local
 
-5. Lancer le script d'inférence (Simulation)
-Dans un second terminal :
+```bash
+# Terminal 1 : service d'inference
+cd app
+python inference_service.py
 
-python models/inference.py
+# Terminal 2 : serveur Flask
+cd app
+python app.py
+```
 
-Documentation détaillée
-Veuillez consulter les documents suivants pour les détails techniques et juridiques :
+Dashboard accessible sur `http://localhost:5000`
 
-Rapport de Veille (docs/veille.md) : Comparatif des modèles (YOLO vs R-CNN), stratégies d'annotation et choix techniques.
+## Deploiement Docker
 
-Architecture de Production (docs/architecture.md) : Proposition de déploiement scalable (Docker, Kubernetes) et gestion de la dérive (Drift).
+```bash
+# Build + lancement
+docker compose up --build -d
 
-Conformité & Éthique (docs/conformite.md) : Analyse d'impact (DPIA), conformité AI Act et mesures de protection des données.
+# Voir les logs
+docker compose logs -f
 
-Auteurs
-Équipe FlowView :
+# Arreter
+docker compose down
+```
 
-Mahmoud Merheb - Rôle (Lead Tech / MLOps)
+## Structure du projet
 
-Arthur Baron - Rôle ( Data Scientist)
+```
+place_publique/
+├── app/
+│   ├── app.py                 # Frontend Flask + API
+│   ├── inference_service.py   # Pipeline YOLO + scraping
+│   ├── database.py            # Modeles SQLAlchemy
+│   ├── config.py              # Configuration
+│   ├── mlflow_tracking.py     # Tracking MLflow + drift
+│   ├── requirements.txt
+│   ├── models/                # Modeles YOLO (.pt)
+│   ├── data/                  # SQLite + MLflow
+│   ├── templates/
+│   └── static/
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
+```
 
-Saadoune Skander - Rôle (Backend Dev)
+## Webcams configurees
 
-Projet académique réalisé conformément au sujet Place Publique MSC-2-IA.
+| Webcam | Localisation | Source |
+|--------|-------------|--------|
+| Place de la Comedie | Montpellier | Viewsurf |
+| Grand Place Bethune | Bethune | Twitch |
+
+## API
+
+- `GET /api/detections/<webcam_id>?hours=24` — donnees Chart.js (line chart)
+- `GET /api/stats/<webcam_id>?period=hourly&class=person` — stats agregees (bar chart)
+
+## MLflow
+
+```bash
+mlflow ui --backend-store-uri sqlite:///app/data/mlflow.db
+```
+
+Interface MLflow sur `http://localhost:5000` (port par defaut MLflow).
